@@ -36,6 +36,8 @@ static ngx_int_t ngx_http_read_early_body(ngx_http_request_t *r);
 static ngx_int_t ngx_http_find_virtual_server(ngx_connection_t *c,
     ngx_http_virtual_names_t *virtual_names, ngx_str_t *host,
     ngx_http_request_t *r, ngx_http_core_srv_conf_t **cscfp);
+static ngx_int_t ngx_http_validate_spaces_host(ngx_str_t *host, ngx_pool_t *pool,
+    ngx_uint_t alloc);
 
 static void ngx_http_request_handler(ngx_event_t *ev);
 static void ngx_http_terminate_request(ngx_http_request_t *r, ngx_int_t rc);
@@ -2281,6 +2283,10 @@ ngx_http_validate_host(ngx_str_t *host, in_port_t *portp, ngx_pool_t *pool,
     size_t      i, dot_pos, host_len;
     ngx_int_t   port;
 
+    if (ngx_strlchr(host->data, host->data + host->len, '@') != NULL) {
+        return ngx_http_validate_spaces_host(host, pool, alloc);
+    }
+
     enum {
         sw_host_start = 0,
         sw_host,
@@ -2465,6 +2471,84 @@ ngx_http_validate_host(ngx_str_t *host, in_port_t *portp, ngx_pool_t *pool,
 
     if (portp) {
         *portp = port;
+    }
+
+    return NGX_OK;
+}
+
+
+/*
+ * Spaces protocol hostnames: @space or subspace@space (see spacesprotocol.org).
+ * freedom-browser forwards these as the HTTP Host header.
+ */
+static ngx_int_t
+ngx_http_validate_spaces_host(ngx_str_t *host, ngx_pool_t *pool, ngx_uint_t alloc)
+{
+    u_char  *h, *p, *last, ch;
+    size_t   at, i;
+
+    h = host->data;
+    last = h + host->len;
+
+    if (host->len == 0) {
+        return NGX_DECLINED;
+    }
+
+    p = ngx_strlchr(h, last, '@');
+    if (p == NULL) {
+        return NGX_DECLINED;
+    }
+
+    if (ngx_strlchr(p + 1, last, '@') != NULL) {
+        return NGX_DECLINED;
+    }
+
+    at = p - h;
+
+    if (at == 0) {
+        for (i = 1; i < host->len; i++) {
+            ch = h[i];
+
+            if (ch <= ' ' || ch == '/' || ch == '?' || ch == '#'
+                || ch == ':' || ch == '@' || ch == '.')
+            {
+                return NGX_DECLINED;
+            }
+        }
+
+        if (host->len == 1) {
+            return NGX_DECLINED;
+        }
+
+    } else {
+        for (i = 0; i < at; i++) {
+            ch = h[i];
+
+            if (ch <= ' ' || ch == '/' || ch == '?' || ch == '#'
+                || ch == ':' || ch == '@')
+            {
+                return NGX_DECLINED;
+            }
+        }
+
+        for (i = at + 1; i < host->len; i++) {
+            ch = h[i];
+
+            if (ch <= ' ' || ch == '/' || ch == '?' || ch == '#'
+                || ch == ':' || ch == '@' || ch == '.')
+            {
+                return NGX_DECLINED;
+            }
+        }
+    }
+
+    if (alloc) {
+        host->data = ngx_pnalloc(pool, host->len);
+        if (host->data == NULL) {
+            return NGX_ERROR;
+        }
+
+        ngx_strlow(host->data, h, host->len);
     }
 
     return NGX_OK;
