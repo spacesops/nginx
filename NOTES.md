@@ -1,1 +1,1 @@
-/usr/local/nginx/sbin/nginx -c /Users/i830671/git/nginx.conf -p /Users/i830671/git -g 'daemon off;'
+/usr/local/nginx/sbin/nginx -c /root/nginx.conf -p /root -g 'daemon off;'
