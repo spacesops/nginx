@@ -1,0 +1,20 @@
+[package]
+name = "fabric-lookupd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+fabric-resolver = { path = "../../certrelay/fabric", default-features = false, features = ["client"] }
+# Match certrelay workspace lockfile (3.1.x changes ZK receipt digests).
+libveritas = { version = "=0.4.5" }
+risc0-zkvm = { version = "=3.0.5" }
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dashmap = "6"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
