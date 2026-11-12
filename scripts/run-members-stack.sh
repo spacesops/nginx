@@ -20,6 +20,8 @@ export FABRIC_SEEDS="${FABRIC_SEEDS:-https://relay-atlas.spacesprotocol.org}"
 export SESSION_SECRET="${SESSION_SECRET:-dev-insecure-change-in-production}"
 export FABRIC_SEARCH_TIMEOUT="${FABRIC_SEARCH_TIMEOUT:-120}"
 export FABRIC_DEV_MODE="${FABRIC_DEV_MODE:-true}"
+# Optional: export FOUNDERS_NPUBS="npub1...,npub1..."
+export FOUNDERS_NPUBS="${FOUNDERS_NPUBS:-}"
 export FABRIC_BIN="$FABRIC_CLI"
 mkdir -p logs
 

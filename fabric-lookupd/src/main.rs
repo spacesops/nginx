@@ -34,6 +34,8 @@ struct AppState {
     seeds: Vec<String>,
     index_client: reqwest::Client,
     dev_mode: bool,
+    /// npubs allowed on founders-tier pages (`FOUNDERS_NPUBS`).
+    founders_npubs: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -151,6 +153,12 @@ async fn run() -> Result<(), String> {
             .filter(|h| !h.is_empty())
             .collect()
     });
+    let founders_npubs: Vec<String> = std::env::var("FOUNDERS_NPUBS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| normalize_npub(s.trim()))
+        .filter(|s| !s.is_empty())
+        .collect();
 
     let fabric = build_fabric(&seeds, dev_mode, trust_id).await?;
 
@@ -165,12 +173,21 @@ async fn run() -> Result<(), String> {
         seeds: seeds.clone(),
         index_client,
         dev_mode,
+        founders_npubs: founders_npubs.clone(),
     };
+
+    if !founders_npubs.is_empty() {
+        eprintln!(
+            "fabric-lookupd: founders tier enabled for {} npub(s)",
+            founders_npubs.len()
+        );
+    }
 
     let app = Router::new()
         .route("/addrs", get(get_addrs))
         .route("/auth/session", post(post_session))
         .route("/auth/verify", get(get_verify))
+        .route("/auth/verify/founders", get(get_verify_founders))
         .route("/auth/logout", post(post_logout))
         .with_state(state);
 
@@ -316,6 +333,18 @@ async fn resolve_handle_via_cli(
         .map(String::from))
 }
 
+fn normalize_npub(npub: &str) -> String {
+    npub.trim().to_lowercase()
+}
+
+fn npub_in_founders(state: &AppState, npub: &str) -> bool {
+    if state.founders_npubs.is_empty() {
+        return false;
+    }
+    let key = normalize_npub(npub);
+    state.founders_npubs.iter().any(|n| n == &key)
+}
+
 fn normalize_handle(h: &str) -> String {
     let lower = h.to_lowercase();
     if lower.contains('@') {
@@ -456,6 +485,14 @@ async fn post_session(State(state): State<AppState>, Json(body): Json<SessionBod
 }
 
 async fn get_verify(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    verify_cookie(&state, headers, false).await
+}
+
+async fn get_verify_founders(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    verify_cookie(&state, headers, true).await
+}
+
+async fn verify_cookie(state: &AppState, headers: HeaderMap, founders_tier: bool) -> Response {
     let Some(payload) = open_cookie(&state.secret, cookie_from_headers(&headers)) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -464,20 +501,27 @@ async fn get_verify(State(state): State<AppState>, headers: HeaderMap) -> Respon
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    match verified_handles(&state, "nostr", &payload.npub).await {
+    if founders_tier && !npub_in_founders(state, &payload.npub) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    match verified_handles(state, "nostr", &payload.npub).await {
         Ok(handles) if !handles.is_empty() => {
             let handle = handles[0].clone();
             let mut resp = (
                 StatusCode::OK,
                 Json(VerifyOk {
-                    npub: payload.npub,
+                    npub: payload.npub.clone(),
                     handle: handle.clone(),
-                    pubkey: payload.pubkey,
+                    pubkey: payload.pubkey.clone(),
                 }),
             )
                 .into_response();
             if let Ok(v) = HeaderValue::from_str(&handle) {
                 resp.headers_mut().insert("X-Verified-Handle", v);
+            }
+            if let Ok(v) = HeaderValue::from_str(&payload.npub) {
+                resp.headers_mut().insert("X-Verified-Npub", v);
             }
             resp
         }

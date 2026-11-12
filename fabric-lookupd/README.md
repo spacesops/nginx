@@ -36,7 +36,8 @@ export SESSION_SECRET="change-me"
 | `FABRIC_SEEDS` | relay-atlas | Comma-separated certrelay URLs |
 | `FABRIC_DEV_MODE` | off | Set `true` for local certrelay still syncing |
 | `FABRIC_TRUST_ID` | — | Optional trust pin (hex) |
-| `FABRIC_ALLOWED_HANDLES` | — | Optional comma allowlist (`name@space`) |
+| `FABRIC_ALLOWED_HANDLES` | — | Optional comma allowlist (`name@space`) for all tiers |
+| `FOUNDERS_NPUBS` | — | Comma-separated npubs allowed on `/auth/verify/founders` and `founders-only.html` |
 | `SESSION_SECRET` | dev placeholder | HMAC cookie signing key |
 | `SESSION_MAX_AGE` | `86400` | Cookie lifetime (seconds) |
 | `VERIFY_CACHE_TTL` | `60` | Per-npub verify cache (seconds) |
