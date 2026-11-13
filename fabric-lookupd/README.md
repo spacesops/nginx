@@ -38,6 +38,7 @@ export SESSION_SECRET="change-me"
 | `FABRIC_TRUST_ID` | — | Optional trust pin (hex) |
 | `FABRIC_ALLOWED_HANDLES` | — | Optional comma allowlist (`name@space`) for all tiers |
 | `FOUNDERS_NPUBS` | — | Comma-separated npubs allowed on `/auth/verify/founders` and `founders-only.html` |
+| `MEMBER_SPACE_SUFFIXES` | `bitvocation,bitcoin` | Parent spaces required for `/auth/verify/members` and `members-only.html` |
 | `SESSION_SECRET` | dev placeholder | HMAC cookie signing key |
 | `SESSION_MAX_AGE` | `86400` | Cookie lifetime (seconds) |
 | `VERIFY_CACHE_TTL` | `60` | Per-npub verify cache (seconds) |
@@ -47,6 +48,8 @@ export SESSION_SECRET="change-me"
 - `GET /addrs?name=nostr&addr=<npub>` — verified handles (requires session cookie via nginx)
 - `POST /auth/session` — `{ "npub", "pubkey?" }` → Set-Cookie on success
 - `GET /auth/verify` — 200 + `X-Verified-Handle` for nginx `auth_request`
+- `GET /auth/verify/members` — verified handle must be under `MEMBER_SPACE_SUFFIXES`
+- `GET /auth/verify/founders` — npub allowlist + verified handle
 - `POST /auth/logout` — clear cookie
 
 Nginx includes [`../conf/fabric-gateway.conf`](../conf/fabric-gateway.conf).

@@ -11,8 +11,14 @@ MEMBERS_PORT="${MEMBERS_PORT:-8088}"
 LOOKUPD_PORT="${LOOKUPD_PORT:-8787}"
 
 if [[ ! -x "$LOOKUPD" ]]; then
-  echo "Build fabric-lookupd first:"
-  echo "  (cd fabric-lookupd && cargo build --release --target-dir target)"
+  echo "Building fabric-lookupd…"
+  (cd fabric-lookupd && env -u CARGO_TARGET_DIR cargo build --release --target-dir target) || {
+    echo "fabric-lookupd build failed"
+    exit 1
+  }
+fi
+if [[ ! -x "$LOOKUPD" ]]; then
+  echo "fabric-lookupd binary missing at $LOOKUPD"
   exit 1
 fi
 
@@ -42,6 +48,37 @@ lookupd_up() {
   [[ "$code" == "401" || "$code" == "200" || "$code" == "403" ]]
 }
 
+lookupd_members_route_ok() {
+  local code
+  code="$(curl --connect-timeout 2 -m 3 -s -o /dev/null -w "%{http_code}" \
+    "http://127.0.0.1:${LOOKUPD_PORT}/auth/verify/members" 2>/dev/null || true)"
+  [[ "$code" == "401" || "$code" == "200" || "$code" == "403" ]]
+}
+
+stop_lookupd() {
+  local pattern="fabric-lookupd/target/release/fabric-lookupd"
+  if ! pgrep -f "$pattern" >/dev/null 2>&1; then
+    return 0
+  fi
+  pkill -TERM -f "$pattern" 2>/dev/null || true
+  sleep 0.5
+  pkill -KILL -f "$pattern" 2>/dev/null || true
+  echo "Stopped old fabric-lookupd."
+}
+
+start_lookupd() {
+  echo "Starting fabric-lookupd on 127.0.0.1:${LOOKUPD_PORT}..."
+  BIND="127.0.0.1:${LOOKUPD_PORT}" "$LOOKUPD" >>logs/lookupd.log 2>&1 &
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 0.3
+    lookupd_up && lookupd_members_route_ok && break
+  done
+  if ! lookupd_up || ! lookupd_members_route_ok; then
+    echo "fabric-lookupd failed to start; see logs/lookupd.log"
+    exit 1
+  fi
+}
+
 port_listening() {
   local port=$1
   if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
@@ -55,16 +92,16 @@ if ! lookupd_up; then
     echo "Port ${LOOKUPD_PORT} is in use but fabric-lookupd did not respond; fix or stop that process first."
     exit 1
   fi
-  echo "Starting fabric-lookupd on 127.0.0.1:${LOOKUPD_PORT}..."
-  BIND="127.0.0.1:${LOOKUPD_PORT}" "$LOOKUPD" >>logs/lookupd.log 2>&1 &
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    sleep 0.3
-    lookupd_up && break
-  done
-  if ! lookupd_up; then
-    echo "fabric-lookupd failed to start; see logs/lookupd.log"
+  start_lookupd
+elif ! lookupd_members_route_ok; then
+  echo "fabric-lookupd on :${LOOKUPD_PORT} is missing /auth/verify/members (stale binary)."
+  stop_lookupd
+  sleep 0.3
+  if port_listening "$LOOKUPD_PORT"; then
+    echo "Port ${LOOKUPD_PORT} still in use after stop; run ./scripts/stop-members-stack.sh"
     exit 1
   fi
+  start_lookupd
 else
   echo "fabric-lookupd already listening on 127.0.0.1:${LOOKUPD_PORT}."
 fi
@@ -75,7 +112,10 @@ members_nginx_running() {
 }
 
 if members_nginx_running; then
-  echo "Members nginx already running for ${NGINX_CONF}."
+  if ./objs/nginx -p "$ROOT" -c "$NGINX_CONF" -t 2>/dev/null; then
+    ./objs/nginx -p "$ROOT" -c "$NGINX_CONF" -s reload 2>/dev/null || true
+  fi
+  echo "Members nginx already running for ${NGINX_CONF} (reloaded config)."
   echo "Site: http://127.0.0.1:${MEMBERS_PORT}/"
   exit 0
 fi

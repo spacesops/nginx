@@ -36,11 +36,20 @@ struct AppState {
     dev_mode: bool,
     /// npubs allowed on founders-tier pages (`FOUNDERS_NPUBS`).
     founders_npubs: Vec<String>,
+    /// Parent space names for members-tier pages (`MEMBER_SPACE_SUFFIXES`).
+    member_space_suffixes: Vec<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VerifyTier {
+    Standard,
+    Founders,
+    Members,
 }
 
 #[derive(Clone)]
 struct CachedVerify {
-    handle: String,
+    handles: Vec<String>,
     until: SystemTime,
 }
 
@@ -159,6 +168,12 @@ async fn run() -> Result<(), String> {
         .map(|s| normalize_npub(s.trim()))
         .filter(|s| !s.is_empty())
         .collect();
+    let member_space_suffixes: Vec<String> = std::env::var("MEMBER_SPACE_SUFFIXES")
+        .unwrap_or_else(|_| "bitvocation,bitcoin".into())
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
 
     let fabric = build_fabric(&seeds, dev_mode, trust_id).await?;
 
@@ -174,6 +189,7 @@ async fn run() -> Result<(), String> {
         index_client,
         dev_mode,
         founders_npubs: founders_npubs.clone(),
+        member_space_suffixes: member_space_suffixes.clone(),
     };
 
     if !founders_npubs.is_empty() {
@@ -182,12 +198,19 @@ async fn run() -> Result<(), String> {
             founders_npubs.len()
         );
     }
+    if !member_space_suffixes.is_empty() {
+        eprintln!(
+            "fabric-lookupd: members tier spaces: {}",
+            member_space_suffixes.join(", ")
+        );
+    }
 
     let app = Router::new()
         .route("/addrs", get(get_addrs))
         .route("/auth/session", post(post_session))
         .route("/auth/verify", get(get_verify))
         .route("/auth/verify/founders", get(get_verify_founders))
+        .route("/auth/verify/members", get(get_verify_members))
         .route("/auth/logout", post(post_logout))
         .with_state(state);
 
@@ -345,6 +368,20 @@ fn npub_in_founders(state: &AppState, npub: &str) -> bool {
     state.founders_npubs.iter().any(|n| n == &key)
 }
 
+fn handle_in_member_spaces(handle: &str, suffixes: &[String]) -> bool {
+    let h = normalize_handle(handle);
+    suffixes
+        .iter()
+        .any(|suf| h.ends_with(&format!("@{suf}")))
+}
+
+fn pick_member_handle(handles: &[String], suffixes: &[String]) -> Option<String> {
+    handles
+        .iter()
+        .find(|h| handle_in_member_spaces(h, suffixes))
+        .cloned()
+}
+
 fn normalize_handle(h: &str) -> String {
     let lower = h.to_lowercase();
     if lower.contains('@') {
@@ -357,7 +394,7 @@ fn normalize_handle(h: &str) -> String {
 async fn verified_handles(state: &AppState, name: &str, addr: &str) -> Result<Vec<String>, String> {
     if let Some(cached) = state.verify_cache.get(addr) {
         if cached.until > SystemTime::now() {
-            return Ok(vec![cached.handle.clone()]);
+            return Ok(cached.handles.clone());
         }
         drop(cached);
         state.verify_cache.remove(addr);
@@ -382,11 +419,11 @@ async fn verified_handles(state: &AppState, name: &str, addr: &str) -> Result<Ve
         handles.retain(|h| allow.iter().any(|a| a == &normalize_handle(h)));
     }
 
-    if let Some(primary) = handles.first() {
+    if !handles.is_empty() {
         state.verify_cache.insert(
             addr.to_string(),
             CachedVerify {
-                handle: primary.clone(),
+                handles: handles.clone(),
                 until: SystemTime::now() + state.verify_cache_ttl,
             },
         );
@@ -485,14 +522,18 @@ async fn post_session(State(state): State<AppState>, Json(body): Json<SessionBod
 }
 
 async fn get_verify(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    verify_cookie(&state, headers, false).await
+    verify_cookie(&state, headers, VerifyTier::Standard).await
 }
 
 async fn get_verify_founders(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    verify_cookie(&state, headers, true).await
+    verify_cookie(&state, headers, VerifyTier::Founders).await
 }
 
-async fn verify_cookie(state: &AppState, headers: HeaderMap, founders_tier: bool) -> Response {
+async fn get_verify_members(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    verify_cookie(&state, headers, VerifyTier::Members).await
+}
+
+async fn verify_cookie(state: &AppState, headers: HeaderMap, tier: VerifyTier) -> Response {
     let Some(payload) = open_cookie(&state.secret, cookie_from_headers(&headers)) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -501,13 +542,23 @@ async fn verify_cookie(state: &AppState, headers: HeaderMap, founders_tier: bool
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    if founders_tier && !npub_in_founders(state, &payload.npub) {
+    if tier == VerifyTier::Founders && !npub_in_founders(state, &payload.npub) {
         return StatusCode::FORBIDDEN.into_response();
     }
 
     match verified_handles(state, "nostr", &payload.npub).await {
         Ok(handles) if !handles.is_empty() => {
-            let handle = handles[0].clone();
+            let handle = match tier {
+                VerifyTier::Members => {
+                    let Some(h) =
+                        pick_member_handle(&handles, &state.member_space_suffixes)
+                    else {
+                        return StatusCode::FORBIDDEN.into_response();
+                    };
+                    h
+                }
+                _ => handles[0].clone(),
+            };
             let mut resp = (
                 StatusCode::OK,
                 Json(VerifyOk {
